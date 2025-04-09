@@ -2,17 +2,22 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import re
 
-st.set_page_config(page_title="Busca de Produtos - Mercado Livre", layout="wide")
-st.title("🔎 Buscador de Produtos no Mercado Livre")
+st.set_page_config(page_title="Busca produtos LM", layout="wide")
+st.title("Busca produtos LM")
 
-produto = st.text_input("Digite o nome do produto que deseja pesquisar", value="notebook")
+produto = st.text_input("Digite o nome do produto que deseja pesquisar", value="cabo titan")
 
 def format_price(preco_str):
     preco_str = preco_str.replace(".", "").replace(",", ".").strip()
     try:
         return float(preco_str)
+    except:
+        return None
+
+def extrair_float_desconto(desconto_str):
+    try:
+        return float(desconto_str.strip().replace("%", "").replace("OFF", "").strip())
     except:
         return None
 
@@ -31,31 +36,47 @@ def scrape_mercadolivre(produto, num_paginas=2):
                 nome = nome_tag.text.strip() if nome_tag else None
                 link = nome_tag['href'] if nome_tag else None
 
+                if nome:
+                    palavras_busca = produto.lower().split()
+                    nome_lower = nome.lower()
+                    if not all(palavra in nome_lower for palavra in palavras_busca):
+                        continue
+
                 marca_tag = item.find('span', class_='poly-component__brand')
                 marca = marca_tag.text.strip() if marca_tag else None
 
-                preco_atual_tag = item.find('span', class_='andes-money-amount__fraction')
-                preco_atual = format_price(preco_atual_tag.text) if preco_atual_tag else None
+                # Preço original com centavos
+                preco_inteiro_tag = item.find('span', class_='andes-money-amount__fraction')
+                preco_centavos_tag = item.find('span', class_='andes-money-amount__cents')
+                preco_str = None
+                if preco_inteiro_tag:
+                    preco_str = preco_inteiro_tag.text.strip()
+                    if preco_centavos_tag:
+                        preco_str += "," + preco_centavos_tag.text.strip()
 
-                preco_original_tag = item.find('span', class_='andes-money-amount__fraction andes-money-amount__discount')
-                preco_original = format_price(preco_original_tag.text) if preco_original_tag else None
+                preco_float = format_price(preco_str) if preco_str else None
 
-                desconto = None
-                if preco_original and preco_atual:
-                    desconto = round((1 - preco_atual / preco_original) * 100, 2)
+                desconto_tag = item.find('span', class_='andes-money-amount__discount')
+                desconto = desconto_tag.text.strip() if desconto_tag else "Sem desconto"
+
+                preco_com_desconto = None
+                if desconto != "Sem desconto" and preco_float:
+                    desconto_float = extrair_float_desconto(desconto)
+                    if desconto_float is not None:
+                        preco_com_desconto = round(preco_float * (1 - desconto_float / 100), 2)
 
                 parcelamento_tag = item.find('span', class_='poly-price__installments')
                 parcelamento = parcelamento_tag.text.strip() if parcelamento_tag else None
 
                 frete_tag = item.find('div', class_='poly-component__shipping')
-                frete = frete_tag.text.strip() if frete_tag else None
+                frete = frete_tag.text.strip() if frete_tag else "À parte"
 
                 resultados.append({
                     "Marca": marca,
                     "Nome": nome,
-                    "Preço Atual (R$)": preco_atual,
-                    "Preço Original (R$)": preco_original,
-                    "Desconto (%)": desconto,
+                    "Preço Original (R$)": preco_str,
+                    "Desconto": desconto,
+                    "Preço com Desconto (R$)": preco_com_desconto,
                     "Parcelamento": parcelamento,
                     "Frete": frete,
                     "Link": link
@@ -70,16 +91,20 @@ if produto:
         df = scrape_mercadolivre(produto)
 
     if not df.empty:
+        df["Preço Float"] = df["Preço com Desconto (R$)"].apply(lambda x: x if isinstance(x, float) else None)
+
         col1, col2, col3 = st.columns(3)
         col1.metric("📊 Produtos encontrados", len(df))
-        col2.metric("💰 Preço médio", f"R$ {df['Preço Atual (R$)'].mean():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        if df['Desconto (%)'].notna().any():
-            col3.metric("🔥 Maior desconto", f"{df['Desconto (%)'].max()}%")
+        if df["Preço Float"].notna().any():
+            col2.metric("💰 Preço médio", f"R$ {df['Preço Float'].mean():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            col3.metric("📈 Faixa de preço", 
+                f"R$ {df['Preço Float'].min():,.2f} - R$ {df['Preço Float'].max():,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
 
         st.subheader("📋 Resultados da busca")
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df.drop(columns=["Preço Float"]), use_container_width=True)
 
-        csv = df.to_csv(index=False).encode('utf-8')
+        csv = df.drop(columns=["Preço Float"]).to_csv(index=False).encode('utf-8')
         st.download_button("📥 Baixar como CSV", csv, file_name="produtos_mercadolivre.csv", mime="text/csv")
     else:
         st.warning("Nenhum produto encontrado.")
