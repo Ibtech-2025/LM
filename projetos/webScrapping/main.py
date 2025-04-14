@@ -6,7 +6,7 @@ import pandas as pd
 st.set_page_config(page_title="Busca produtos LM", layout="wide")
 st.title("Busca produtos LM")
 
-produto = st.text_input("Digite o nome do produto que deseja pesquisar", value="cabo titan")
+produto = st.text_input("Digite o nome do produto que deseja pesquisar", value="")
 
 def format_price(preco_str):
     preco_str = preco_str.replace(".", "").replace(",", ".").strip()
